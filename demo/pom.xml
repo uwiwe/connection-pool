@@ -18,6 +18,14 @@
       <artifactId>postgresql</artifactId>
       <version>42.7.4</version>
     </dependency>
+
+      <dependency>
+          <groupId>com.zaxxer</groupId>
+          <artifactId>HikariCP</artifactId>
+          <version>5.1.0</version>
+      </dependency>
+
+
   </dependencies>
 
   <build>
@@ -27,7 +35,7 @@
         <artifactId>exec-maven-plugin</artifactId>
         <version>3.3.0</version>
         <configuration>
-          <mainClass>PoolSimApp</mainClass>
+          <mainClass>com.example.PoolSimApp</mainClass>
         </configuration>
       </plugin>
     </plugins>

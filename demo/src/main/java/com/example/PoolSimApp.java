@@ -1,3 +1,4 @@
+
 package com.example;
 
 import java.io.*;
@@ -14,9 +15,7 @@ import com.zaxxer.hikari.HikariDataSource;
 
 public class PoolSimApp {
 
-    // =============================
-    // CONFIG
-    // =============================
+
     static class Config {
         final String url, user, password, query, logFile;
         final int samples, maxRetries;
@@ -47,9 +46,6 @@ public class PoolSimApp {
         }
     }
 
-    // =============================
-    // LOGGER
-    // =============================
     static class SimpleLogger implements Closeable {
         private final BufferedWriter out;
         private final DateTimeFormatter fmt =
@@ -74,9 +70,7 @@ public class PoolSimApp {
         @Override public void close() throws IOException { out.close(); }
     }
 
-    // =============================
-    // METRICS
-    // =============================
+
     static class Metrics {
         final LongAdder ok = new LongAdder();
         final LongAdder fail = new LongAdder();
@@ -89,9 +83,7 @@ public class PoolSimApp {
         }
     }
 
-    // =============================
-    // WORKER RAW
-    // =============================
+
     static class WorkerRaw implements Runnable {
         private final int id;
         private final Config cfg;
@@ -144,9 +136,7 @@ public class PoolSimApp {
         }
     }
 
-    // =============================
-    // WORKER POOLED
-    // =============================
+
     static class WorkerPooled implements Runnable {
         private final int id;
         private final Config cfg;
@@ -212,9 +202,7 @@ public class PoolSimApp {
         return new HikariDataSource(hc);
     }
 
-    // =============================
-    // MAIN CON MENÚ
-    // =============================
+
     public static void main(String[] args) throws Exception {
 
         Properties p = new Properties();

@@ -1,4 +1,3 @@
-
 package com.example;
 
 import java.io.*;
@@ -6,15 +5,96 @@ import java.sql.*;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Properties;
-import java.util.Scanner;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.LongAdder;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
-
 public class PoolSimApp {
 
+    public static void main(String[] args) throws Exception {
+
+        Properties p = new Properties();
+        try (InputStream in =
+                     PoolSimApp.class.getClassLoader()
+                             .getResourceAsStream("config.properties")) {
+            if (in == null)
+                throw new RuntimeException("No se encontró config.properties");
+            p.load(in);
+        }
+
+        Config cfg = new Config(p);
+
+        try (SimpleLogger logger = new SimpleLogger(cfg.logFile)) {
+
+            System.out.println("=== INICIANDO RAW ===");
+            runRaw(cfg, logger);
+
+            System.out.println("\n=== INICIANDO POOLED ===");
+            runPooled(cfg, logger);
+        }
+    }
+
+
+    static void runRaw(Config cfg, SimpleLogger logger) throws Exception {
+
+        ExecutorService exec = Executors.newFixedThreadPool(cfg.samples);
+        CountDownLatch ready = new CountDownLatch(cfg.samples);
+        CountDownLatch start = new CountDownLatch(1);
+        Metrics metrics = new Metrics();
+
+        for (int i = 0; i < cfg.samples; i++) {
+            exec.submit(new WorkerRaw(i, cfg, ready, start, logger, metrics));
+        }
+
+        ready.await();
+        long t0 = System.currentTimeMillis();
+        start.countDown();
+
+        exec.shutdown();
+        exec.awaitTermination(10, TimeUnit.MINUTES);
+
+        long total = System.currentTimeMillis() - t0;
+
+        System.out.println("Conexiones exitosas : " + metrics.ok.sum());
+        System.out.println("Conexiones fallidas : " + metrics.fail.sum());
+        System.out.println("Tiempo total (ms)   : " + total);
+        System.out.println("====================================");
+    }
+
+
+    static void runPooled(Config cfg, SimpleLogger logger) throws Exception {
+
+        ExecutorService exec = Executors.newFixedThreadPool(cfg.samples);
+        CountDownLatch ready = new CountDownLatch(cfg.samples);
+        CountDownLatch start = new CountDownLatch(1);
+        Metrics metrics = new Metrics();
+
+        BlockingQueue<Connection> pool =
+                new ArrayBlockingQueue<>(cfg.poolMaxSize);
+
+        for (int i = 0; i < cfg.poolMaxSize; i++) {
+            pool.offer(DriverManager.getConnection(
+                    cfg.url, cfg.user, cfg.password));
+        }
+
+        for (int i = 0; i < cfg.samples; i++) {
+            exec.submit(new WorkerPooled(
+                    i, cfg, pool, ready, start, logger, metrics));
+        }
+
+        ready.await();
+        long t0 = System.currentTimeMillis();
+        start.countDown();
+
+        exec.shutdown();
+        exec.awaitTermination(10, TimeUnit.MINUTES);
+
+        long total = System.currentTimeMillis() - t0;
+
+        System.out.println("Conexiones exitosas : " + metrics.ok.sum());
+        System.out.println("Conexiones fallidas : " + metrics.fail.sum());
+        System.out.println("Tiempo total (ms)   : " + total);
+        System.out.println("=======================================");
+    }
 
     static class Config {
         final String url, user, password, query, logFile;
@@ -26,7 +106,7 @@ public class PoolSimApp {
         Config(Properties p) {
             url = req(p, "db.url");
             user = req(p, "db.user");
-            password = req(p, "db.password");
+            password = p.getProperty("db.password", "").trim();
             query = req(p, "db.query");
 
             samples = Integer.parseInt(p.getProperty("samples", "20").trim());
@@ -35,7 +115,8 @@ public class PoolSimApp {
 
             poolMaxSize = Integer.parseInt(p.getProperty("pool.maxSize", "10"));
             poolMinIdle = Integer.parseInt(p.getProperty("pool.minIdle", "2"));
-            poolTimeout = Long.parseLong(p.getProperty("pool.connectionTimeoutMs", "30000"));
+            poolTimeout = Long.parseLong(
+                    p.getProperty("pool.connectionTimeoutMs", "30000"));
         }
 
         static String req(Properties p, String k) {
@@ -67,9 +148,9 @@ public class PoolSimApp {
 
         String ts() { return LocalDateTime.now().format(fmt); }
 
-        @Override public void close() throws IOException { out.close(); }
+        @Override
+        public void close() throws IOException { out.close(); }
     }
-
 
     static class Metrics {
         final LongAdder ok = new LongAdder();
@@ -83,7 +164,6 @@ public class PoolSimApp {
         }
     }
 
-
     static class WorkerRaw implements Runnable {
         private final int id;
         private final Config cfg;
@@ -92,7 +172,8 @@ public class PoolSimApp {
         private final SimpleLogger logger;
         private final Metrics metrics;
 
-        WorkerRaw(int id, Config cfg, CountDownLatch ready, CountDownLatch start,
+        WorkerRaw(int id, Config cfg,
+                  CountDownLatch ready, CountDownLatch start,
                   SimpleLogger logger, Metrics metrics) {
             this.id = id;
             this.cfg = cfg;
@@ -112,7 +193,8 @@ public class PoolSimApp {
             long t0 = System.nanoTime();
 
             for (int attempt = 1; attempt <= (cfg.maxRetries + 1); attempt++) {
-                try (Connection c = DriverManager.getConnection(cfg.url, cfg.user, cfg.password);
+                try (Connection c =
+                             DriverManager.getConnection(cfg.url, cfg.user, cfg.password);
                      PreparedStatement ps = c.prepareStatement(cfg.query)) {
 
                     ps.execute();
@@ -126,7 +208,8 @@ public class PoolSimApp {
                 }
             }
 
-            long ms = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
+            long ms = TimeUnit.NANOSECONDS.toMillis(
+                    System.nanoTime() - t0);
             metrics.record(success, retriesUsed);
 
             logger.log("%s - raw - id=%d - %s - reintentos=%d - tiempo=%d ms"
@@ -136,25 +219,28 @@ public class PoolSimApp {
         }
     }
 
-
     static class WorkerPooled implements Runnable {
         private final int id;
         private final Config cfg;
+        private final BlockingQueue<Connection> pool;
         private final CountDownLatch ready;
         private final CountDownLatch start;
         private final SimpleLogger logger;
         private final Metrics metrics;
-        private final HikariDataSource ds;
 
-        WorkerPooled(int id, Config cfg, CountDownLatch ready, CountDownLatch start,
-                     SimpleLogger logger, Metrics metrics, HikariDataSource ds) {
+        WorkerPooled(int id, Config cfg,
+                     BlockingQueue<Connection> pool,
+                     CountDownLatch ready,
+                     CountDownLatch start,
+                     SimpleLogger logger,
+                     Metrics metrics) {
             this.id = id;
             this.cfg = cfg;
+            this.pool = pool;
             this.ready = ready;
             this.start = start;
             this.logger = logger;
             this.metrics = metrics;
-            this.ds = ds;
         }
 
         @Override
@@ -167,21 +253,36 @@ public class PoolSimApp {
             long t0 = System.nanoTime();
 
             for (int attempt = 1; attempt <= (cfg.maxRetries + 1); attempt++) {
-                try (Connection c = ds.getConnection();
-                     PreparedStatement ps = c.prepareStatement(cfg.query)) {
 
-                    ps.execute();
+                Connection c = null;
+
+                try {
+                    c = pool.poll(cfg.poolTimeout, TimeUnit.MILLISECONDS);
+
+                    if (c == null)
+                        throw new TimeoutException("Timeout pool");
+
+                    try (PreparedStatement ps = c.prepareStatement(cfg.query)) {
+                        ps.execute();
+                    }
+
                     success = true;
                     retriesUsed = attempt - 1;
+                    pool.offer(c);
                     break;
 
                 } catch (Exception ex) {
+
+                    if (c != null)
+                        pool.offer(c);
+
                     if (attempt == cfg.maxRetries + 1)
                         retriesUsed = attempt - 1;
                 }
             }
 
-            long ms = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
+            long ms = TimeUnit.NANOSECONDS.toMillis(
+                    System.nanoTime() - t0);
             metrics.record(success, retriesUsed);
 
             logger.log("%s - pooled - id=%d - %s - reintentos=%d - tiempo=%d ms"
@@ -189,108 +290,5 @@ public class PoolSimApp {
                             success ? "exitoso" : "fallido",
                             retriesUsed, ms));
         }
-    }
-
-    static HikariDataSource createPool(Config cfg) {
-        HikariConfig hc = new HikariConfig();
-        hc.setJdbcUrl(cfg.url);
-        hc.setUsername(cfg.user);
-        hc.setPassword(cfg.password);
-        hc.setMaximumPoolSize(cfg.poolMaxSize);
-        hc.setMinimumIdle(cfg.poolMinIdle);
-        hc.setConnectionTimeout(cfg.poolTimeout);
-        return new HikariDataSource(hc);
-    }
-
-
-    public static void main(String[] args) throws Exception {
-
-        Properties p = new Properties();
-        try (InputStream is = PoolSimApp.class
-                .getClassLoader()
-                .getResourceAsStream("config.properties")) {
-            p.load(is);
-        }
-
-        Config cfg = new Config(p);
-
-        Scanner sc = new Scanner(System.in);
-
-        System.out.println("Seleccione modo:");
-        System.out.println("1 - RAW");
-        System.out.println("2 - POOLED");
-        System.out.println("3 - Ambos");
-        System.out.print("Opción: ");
-
-        int opcion = sc.nextInt();
-
-        try (SimpleLogger logger = new SimpleLogger(cfg.logFile)) {
-
-            if (opcion == 1 || opcion == 3) {
-                ejecutarRaw(cfg, logger);
-            }
-
-            if (opcion == 2 || opcion == 3) {
-                ejecutarPooled(cfg, logger);
-            }
-        }
-    }
-
-    static void ejecutarRaw(Config cfg, SimpleLogger logger) throws InterruptedException {
-
-        Metrics metrics = new Metrics();
-        ExecutorService exec = Executors.newFixedThreadPool(cfg.samples);
-        CountDownLatch ready = new CountDownLatch(cfg.samples);
-        CountDownLatch start = new CountDownLatch(1);
-
-        long t0 = System.nanoTime();
-
-        for (int i = 1; i <= cfg.samples; i++) {
-            exec.submit(new WorkerRaw(i, cfg, ready, start, logger, metrics));
-        }
-
-        ready.await();
-        start.countDown();
-
-        exec.shutdown();
-        exec.awaitTermination(2, TimeUnit.MINUTES);
-
-        long total = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
-
-        System.out.println("\n===== RAW =====");
-        System.out.println("Tiempo total: " + total + " ms");
-        System.out.println("Exitosas: " + metrics.ok.sum());
-        System.out.println("Fallidas: " + metrics.fail.sum());
-    }
-
-    static void ejecutarPooled(Config cfg, SimpleLogger logger) throws InterruptedException {
-
-        Metrics metrics = new Metrics();
-        HikariDataSource ds = createPool(cfg);
-
-        ExecutorService exec = Executors.newFixedThreadPool(cfg.samples);
-        CountDownLatch ready = new CountDownLatch(cfg.samples);
-        CountDownLatch start = new CountDownLatch(1);
-
-        long t0 = System.nanoTime();
-
-        for (int i = 1; i <= cfg.samples; i++) {
-            exec.submit(new WorkerPooled(i, cfg, ready, start, logger, metrics, ds));
-        }
-
-        ready.await();
-        start.countDown();
-
-        exec.shutdown();
-        exec.awaitTermination(2, TimeUnit.MINUTES);
-
-        long total = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
-
-        System.out.println("\n===== POOLED =====");
-        System.out.println("Tiempo total: " + total + " ms");
-        System.out.println("Exitosas: " + metrics.ok.sum());
-        System.out.println("Fallidas: " + metrics.fail.sum());
-
-        ds.close();
     }
 }

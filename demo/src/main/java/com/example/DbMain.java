@@ -19,11 +19,15 @@ public class DbMain {
         String user = cfg.getProperty("db.user");
         String password = cfg.getProperty("db.password");
 
+        String mysqlUrl = cfg.getProperty("mysql.url");
+        String mysqlUser = cfg.getProperty("mysql.user");
+        String mysqlPassword = cfg.getProperty("mysql.password");
+
         System.out.println("=== DbComponent - Postgres ===");
         demoPostgres(url, user, password);
 
         System.out.println("\n=== DbComponent - MySQL ===");
-        demoMysql("jdbc:mysql://localhost:3306/university", "admin", "wiwe3008");
+        demoMysql(mysqlUrl, mysqlUser, mysqlPassword);
     }
 
     static void demoPostgres(String url, String user, String password) throws Exception {

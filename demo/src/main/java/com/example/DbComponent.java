@@ -5,12 +5,12 @@ import java.sql.*;
 import java.util.Properties;
 import java.util.concurrent.*;
 
-public class DbComponent<A extends IAdapter> implements AutoCloseable {
+public class DbComponent<A extends IAdapter> {
 
-    private final A adapter;
-    private final Properties queries;
-    private final ArrayBlockingQueue<Connection> pool;
-    private final long timeoutMs;
+    private A adapter;
+    private Properties queries;
+    private ArrayBlockingQueue<Connection> pool;
+    private long timeoutMs;
 
     public DbComponent(A adapter, int poolSize, long timeoutMs) throws Exception {
         this.adapter = adapter;
@@ -18,10 +18,9 @@ public class DbComponent<A extends IAdapter> implements AutoCloseable {
 
         // cargar queries del archivo
         Properties p = new Properties();
-        try (InputStream in = DbComponent.class.getClassLoader().getResourceAsStream("queries.properties")) {
-            if (in == null) throw new RuntimeException("No se encontro queries.properties");
-            p.load(in);
-        }
+        InputStream in = DbComponent.class.getClassLoader().getResourceAsStream("queries.properties");
+        if (in == null) throw new RuntimeException("No se encontro queries.properties");
+        p.load(in);
         this.queries = p;
 
         // inicializar el pool
@@ -74,7 +73,6 @@ public class DbComponent<A extends IAdapter> implements AutoCloseable {
         pool.offer(c);
     }
 
-    @Override
     public void close() throws Exception {
         for (Connection c : pool) {
             try { c.close(); } catch (Exception e) {}

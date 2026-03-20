@@ -1,8 +1,6 @@
 package com.example;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
+import java.sql.*;
 
 public class PostgresAdapter implements IAdapter {
 
@@ -11,8 +9,8 @@ public class PostgresAdapter implements IAdapter {
     private final String password;
 
     public PostgresAdapter(String url, String user, String password) {
-        this.url      = url;
-        this.user     = user;
+        this.url = url;
+        this.user = user;
         this.password = password;
     }
 

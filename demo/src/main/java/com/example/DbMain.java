@@ -1,68 +1,114 @@
 package com.example;
 
-import java.sql.Connection;
-import java.sql.ResultSet;
+import java.io.*;
+import java.sql.*;
+import java.util.Properties;
 
 public class DbMain {
 
     public static void main(String[] args) throws Exception {
 
-        System.out.println("=== DbComponent Demo — H2 (in-memory) ===");
-        demoH2();
+        // leer config
+        Properties cfg = new Properties();
+        try (InputStream in = DbMain.class.getClassLoader().getResourceAsStream("config.properties")) {
+            if (in == null) throw new RuntimeException("No se encontro config.properties");
+            cfg.load(in);
+        }
 
-        // Descomenta para probar con Postgres real:
-        // System.out.println("\n=== DbComponent Demo — Postgres ===");
-        // demoPostgres();
+        String url = cfg.getProperty("db.url");
+        String user = cfg.getProperty("db.user");
+        String password = cfg.getProperty("db.password");
+
+        System.out.println("=== DbComponent - Postgres ===");
+        demoPostgres(url, user, password);
+
+        System.out.println("\n=== DbComponent - MySQL ===");
+        demoMysql("jdbc:mysql://localhost:3306/university", "admin", "wiwe3008");
     }
 
-    static void demoH2() throws Exception {
-        H2Adapter h2 = new H2Adapter(
-                "jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1", "sa", "");
+    static void demoPostgres(String url, String user, String password) throws Exception {
+        PostgresAdapter pg = new PostgresAdapter(url, user, password);
 
-        try (DbComponent<H2Adapter> db = new DbComponent<>(h2, 3, 2000)) {
+        try (DbComponent<PostgresAdapter> db = new DbComponent<>(pg, 5, 5000)) {
 
-            // 1. Crear tabla (transacción)
+            // limpiar de corridas anteriores
+            Connection drop = db.transaction("drop.table");
+            drop.commit();
+            db.endTransaction(drop);
+
+            // 1. crear tabla
             Connection c = db.transaction("create.table");
             c.commit();
             db.endTransaction(c);
-            System.out.println("Tabla creada.");
+            System.out.println("tabla creada");
 
-            // 2. Insertar filas (transacciones)
+            // 2. insertar datos
             for (String nombre : new String[]{"Alice", "Bob", "Carlos"}) {
                 Connection cx = db.transaction("insert.user", nombre);
                 cx.commit();
                 db.endTransaction(cx);
-                System.out.println("Insertado: " + nombre);
+                System.out.println("insertado: " + nombre);
             }
 
-            // 3. Consultar todos (query)
+            // 3. ver todos
             ResultSet rs = db.query("find.all.users");
-            System.out.println("\nUsuarios en la BD:");
+            System.out.println("\nusuarios en la bd:");
             while (rs.next()) {
-                System.out.println("  id=" + rs.getInt("id")
-                        + "  nombre=" + rs.getString("name"));
+                System.out.println("  id=" + rs.getInt("id") + "  nombre=" + rs.getString("name"));
             }
 
-            // 4. Buscar por ID (query con parámetro)
+            // 4. buscar por id
             ResultSet rs2 = db.query("find.user.by.id", 1);
             if (rs2.next()) {
-                System.out.println("\nBúsqueda por id=1: " + rs2.getString("name"));
+                System.out.println("\nbusqueda id=1: " + rs2.getString("name"));
             }
 
-            // 5. Ping
+            // 5. ping
             db.query("ping");
-            System.out.println("\nPing OK.");
+            System.out.println("ping ok");
         }
     }
 
-    static void demoPostgres() throws Exception {
-        PostgresAdapter pg = new PostgresAdapter(
-                "jdbc:postgresql://localhost:5432/proyectovisual",
-                "postgres", "miki/52511");
+    static void demoMysql(String url, String user, String password) throws Exception {
+        MySQLAdapter mysql = new MySQLAdapter(url, user, password);
 
-        try (DbComponent<PostgresAdapter> db = new DbComponent<>(pg, 5, 5000)) {
-            ResultSet rs = db.query("ping");
-            if (rs.next()) System.out.println("Postgres ping: " + rs.getInt(1));
+        try (DbComponent<MySQLAdapter> db = new DbComponent<>(mysql, 5, 5000)) {
+
+            // limpiar de corridas anteriores
+            Connection drop = db.transaction("drop.table");
+            drop.commit();
+            db.endTransaction(drop);
+
+            // 1. crear tabla
+            Connection c = db.transaction("create.table.mysql");
+            c.commit();
+            db.endTransaction(c);
+            System.out.println("tabla creada");
+
+            // 2. insertar datos
+            for (String nombre : new String[]{"Alice", "Bob", "Carlos"}) {
+                Connection cx = db.transaction("insert.user", nombre);
+                cx.commit();
+                db.endTransaction(cx);
+                System.out.println("insertado: " + nombre);
+            }
+
+            // 3. ver todos
+            ResultSet rs = db.query("find.all.users");
+            System.out.println("\nusuarios en la bd:");
+            while (rs.next()) {
+                System.out.println("  id=" + rs.getInt("id") + "  nombre=" + rs.getString("name"));
+            }
+
+            // 4. buscar por id
+            ResultSet rs2 = db.query("find.user.by.id", 1);
+            if (rs2.next()) {
+                System.out.println("\nbusqueda id=1: " + rs2.getString("name"));
+            }
+
+            // 5. ping
+            db.query("ping");
+            System.out.println("ping ok");
         }
     }
 }

@@ -1,45 +1,41 @@
 package com.example;
 
-import java.io.InputStream;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.io.*;
+import java.sql.*;
 import java.util.Properties;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 public class DbComponent<A extends IAdapter> implements AutoCloseable {
 
     private final A adapter;
     private final Properties queries;
-    private final BlockingQueue<Connection> pool;
+    private final ArrayBlockingQueue<Connection> pool;
     private final long timeoutMs;
 
-    /**
-     * @param adapter   el adaptador concreto (Postgres o H2)
-     * @param poolSize  cantidad de conexiones a pre-abrir
-     * @param timeoutMs tiempo máximo de espera para obtener una conexión (ms)
-     */
     public DbComponent(A adapter, int poolSize, long timeoutMs) throws Exception {
-        this.adapter   = adapter;
+        this.adapter = adapter;
         this.timeoutMs = timeoutMs;
-        this.queries   = loadQueries();
-        this.pool      = new ArrayBlockingQueue<>(poolSize);
 
+        // cargar queries del archivo
+        Properties p = new Properties();
+        try (InputStream in = DbComponent.class.getClassLoader().getResourceAsStream("queries.properties")) {
+            if (in == null) throw new RuntimeException("No se encontro queries.properties");
+            p.load(in);
+        }
+        this.queries = p;
+
+        // inicializar el pool
+        this.pool = new ArrayBlockingQueue<>(poolSize);
         for (int i = 0; i < poolSize; i++) {
             pool.offer(adapter.openConnection());
         }
     }
 
-    /**
-     * Ejecuta una query predefinida (SELECT). Pide conexión del pool,
-     * ejecuta y la devuelve al pool.
-     */
-    public ResultSet query(String queryName, Object... params) throws Exception {
-        String sql = requireQuery(queryName);
-        Connection c = borrow();
+    // ejecuta una query del archivo, no acepta sql directo
+    public ResultSet query(String nombre, Object... params) throws Exception {
+        String sql = getQuery(nombre);
+        Connection c = pool.poll(timeoutMs, TimeUnit.MILLISECONDS);
+        if (c == null) throw new RuntimeException("no habia conexiones en el pool");
         try {
             PreparedStatement ps = c.prepareStatement(sql);
             for (int i = 0; i < params.length; i++) {
@@ -51,14 +47,11 @@ public class DbComponent<A extends IAdapter> implements AutoCloseable {
         }
     }
 
-    /**
-     * Ejecuta una query predefinida dentro de una transacción (INSERT/UPDATE/DELETE).
-     * Retorna la conexión con autoCommit=false para que el caller haga commit/rollback.
-     * Siempre llamar endTransaction(c) al terminar.
-     */
-    public Connection transaction(String queryName, Object... params) throws Exception {
-        String sql = requireQuery(queryName);
-        Connection c = borrow();
+    // ejecuta en transaccion, devuelve la conexion para hacer commit/rollback afuera
+    public Connection transaction(String nombre, Object... params) throws Exception {
+        String sql = getQuery(nombre);
+        Connection c = pool.poll(timeoutMs, TimeUnit.MILLISECONDS);
+        if (c == null) throw new RuntimeException("no habia conexiones en el pool");
         c.setAutoCommit(false);
         try {
             PreparedStatement ps = c.prepareStatement(sql);
@@ -75,9 +68,7 @@ public class DbComponent<A extends IAdapter> implements AutoCloseable {
         }
     }
 
-    /**
-     * Devuelve la conexión transaccional al pool (llamar después de commit/rollback).
-     */
+    // hay que llamar esto despues del commit/rollback para liberar la conexion
     public void endTransaction(Connection c) throws SQLException {
         c.setAutoCommit(true);
         pool.offer(c);
@@ -86,31 +77,13 @@ public class DbComponent<A extends IAdapter> implements AutoCloseable {
     @Override
     public void close() throws Exception {
         for (Connection c : pool) {
-            try { c.close(); } catch (Exception ignored) {}
+            try { c.close(); } catch (Exception e) {}
         }
     }
 
-    // --- privados ---
-
-    private Connection borrow() throws Exception {
-        Connection c = pool.poll(timeoutMs, TimeUnit.MILLISECONDS);
-        if (c == null) throw new RuntimeException("Pool timeout: no hay conexiones disponibles");
-        return c;
-    }
-
-    private String requireQuery(String name) {
-        String sql = queries.getProperty(name);
-        if (sql == null) throw new IllegalArgumentException("Query no encontrada: " + name);
-        return sql.trim();
-    }
-
-    private static Properties loadQueries() throws Exception {
-        Properties p = new Properties();
-        try (InputStream in =
-                DbComponent.class.getClassLoader().getResourceAsStream("queries.properties")) {
-            if (in == null) throw new RuntimeException("queries.properties no encontrado en classpath");
-            p.load(in);
-        }
-        return p;
+    private String getQuery(String nombre) {
+        String sql = queries.getProperty(nombre);
+        if (sql == null) throw new IllegalArgumentException("no existe esa query: " + nombre);
+        return sql;
     }
 }

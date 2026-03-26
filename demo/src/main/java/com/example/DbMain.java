@@ -33,24 +33,16 @@ public class DbMain {
         PostgresAdapter pg = new PostgresAdapter(url, user, password);
         DbComponent db = new DbComponent(pg, poolSize, timeoutMs);
 
-        // limpiar de corridas anteriores
-        Connection drop = db.transaction("drop.table");
-        drop.commit();
-        db.endTransaction(drop);
-
-        // crear tabla
-        Connection c = db.transaction("create.table");
-        c.commit();
-        db.endTransaction(c);
+        // limpiar y crear tabla
+        db.transaction(new String[]{"drop.table", "create.table"}, null);
         System.out.println("tabla creada");
 
-        // insertar datos
-        for (String nombre : new String[]{"Alice", "Bob", "Carlos"}) {
-            Connection cx = db.transaction("insert.user", nombre);
-            cx.commit();
-            db.endTransaction(cx);
-            System.out.println("insertado: " + nombre);
-        }
+        // insertar los 3 usuarios en una sola transaccion
+        db.transaction(
+            new String[]{"insert.user", "insert.user", "insert.user"},
+            new Object[][]{{"Alice"}, {"Bob"}, {"Carlos"}}
+        );
+        System.out.println("insertados: Alice, Bob, Carlos");
 
         // ver todos
         ResultSet rs = db.query("find.all.users");
@@ -77,24 +69,16 @@ public class DbMain {
         MySQLAdapter mysql = new MySQLAdapter(mysqlUrl, mysqlUser, mysqlPassword);
         DbComponent db2 = new DbComponent(mysql, poolSize, timeoutMs);
 
-        // limpiar de corridas anteriores
-        Connection drop2 = db2.transaction("drop.table");
-        drop2.commit();
-        db2.endTransaction(drop2);
-
-        // crear tabla
-        Connection c2 = db2.transaction("create.table.mysql");
-        c2.commit();
-        db2.endTransaction(c2);
+        // limpiar y crear tabla
+        db2.transaction(new String[]{"drop.table", "create.table.mysql"}, null);
         System.out.println("tabla creada");
 
-        // insertar datos
-        for (String nombre : new String[]{"Alice", "Bob", "Carlos"}) {
-            Connection cx = db2.transaction("insert.user", nombre);
-            cx.commit();
-            db2.endTransaction(cx);
-            System.out.println("insertado: " + nombre);
-        }
+        // insertar los 3 usuarios en una sola transaccion
+        db2.transaction(
+            new String[]{"insert.user", "insert.user", "insert.user"},
+            new Object[][]{{"Alice"}, {"Bob"}, {"Carlos"}}
+        );
+        System.out.println("insertados: Alice, Bob, Carlos");
 
         // ver todos
         ResultSet rs3 = db2.query("find.all.users");

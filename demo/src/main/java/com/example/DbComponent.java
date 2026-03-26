@@ -1,7 +1,13 @@
 package com.example;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.moandjiezana.toml.Toml;
+import org.yaml.snakeyaml.Yaml;
+
 import java.io.*;
 import java.sql.*;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.*;
 
@@ -15,13 +21,7 @@ public class DbComponent<A extends IAdapter> {
     public DbComponent(A adapter, int poolSize, long timeoutMs) throws Exception {
         this.adapter = adapter;
         this.timeoutMs = timeoutMs;
-
-        // cargar queries del archivo
-        Properties p = new Properties();
-        InputStream in = DbComponent.class.getClassLoader().getResourceAsStream("queries.properties");
-        if (in == null) throw new RuntimeException("No se encontro queries.properties");
-        p.load(in);
-        this.queries = p;
+        this.queries = loadQueries();
 
         // inicializar el pool
         this.pool = new ArrayBlockingQueue<>(poolSize);
@@ -46,31 +46,29 @@ public class DbComponent<A extends IAdapter> {
         }
     }
 
-    // ejecuta en transaccion, devuelve la conexion para hacer commit/rollback afuera
-    public Connection transaction(String nombre, Object... params) throws Exception {
-        String sql = getQuery(nombre);
+    // ejecuta varias queries en una sola transaccion, hace commit si todo sale bien o rollback si algo falla
+    public void transaction(String[] nombres, Object[][] params) throws Exception {
         Connection c = pool.poll(timeoutMs, TimeUnit.MILLISECONDS);
         if (c == null) throw new RuntimeException("no habia conexiones en el pool");
         c.setAutoCommit(false);
         try {
-            PreparedStatement ps = c.prepareStatement(sql);
-            for (int i = 0; i < params.length; i++) {
-                ps.setObject(i + 1, params[i]);
+            for (int i = 0; i < nombres.length; i++) {
+                String sql = getQuery(nombres[i]);
+                PreparedStatement ps = c.prepareStatement(sql);
+                Object[] p = (params != null && i < params.length && params[i] != null) ? params[i] : new Object[0];
+                for (int j = 0; j < p.length; j++) {
+                    ps.setObject(j + 1, p[j]);
+                }
+                ps.executeUpdate();
             }
-            ps.executeUpdate();
-            return c;
+            c.commit();
         } catch (Exception e) {
             c.rollback();
+            throw e;
+        } finally {
             c.setAutoCommit(true);
             pool.offer(c);
-            throw e;
         }
-    }
-
-    // hay que llamar esto despues del commit/rollback para liberar la conexion
-    public void endTransaction(Connection c) throws SQLException {
-        c.setAutoCommit(true);
-        pool.offer(c);
     }
 
     public void close() throws Exception {
@@ -83,5 +81,43 @@ public class DbComponent<A extends IAdapter> {
         String sql = queries.getProperty(nombre);
         if (sql == null) throw new IllegalArgumentException("no existe esa query: " + nombre);
         return sql;
+    }
+
+    // busca el archivo de queries en los formatos soportados (json, yaml, toml, properties)
+    private static Properties loadQueries() throws Exception {
+        ClassLoader cl = DbComponent.class.getClassLoader();
+
+        InputStream json = cl.getResourceAsStream("queries.json");
+        if (json != null) {
+            ObjectMapper mapper = new ObjectMapper();
+            Map<String, String> mapa = mapper.readValue(json, new TypeReference<Map<String, String>>() {});
+            Properties p = new Properties();
+            p.putAll(mapa);
+            return p;
+        }
+
+        InputStream yaml = cl.getResourceAsStream("queries.yaml");
+        if (yaml != null) {
+            Map<String, String> mapa = new Yaml().load(yaml);
+            Properties p = new Properties();
+            p.putAll(mapa);
+            return p;
+        }
+
+        InputStream toml = cl.getResourceAsStream("queries.toml");
+        if (toml != null) {
+            Properties p = new Properties();
+            new Toml().read(toml).toMap().forEach((k, v) -> p.setProperty(k, v.toString()));
+            return p;
+        }
+
+        InputStream props = cl.getResourceAsStream("queries.properties");
+        if (props != null) {
+            Properties p = new Properties();
+            p.load(props);
+            return p;
+        }
+
+        throw new RuntimeException("no se encontro archivo de queries (json/yaml/toml/properties)");
     }
 }
